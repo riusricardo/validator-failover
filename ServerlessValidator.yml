@@ -1,0 +1,251 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: A sample template to test
+
+Parameters:
+  InstanceId:
+    Type: String
+    Default: i-<REPLACE ME>
+  LambdaSize:
+    Type: Number
+    Default: 256
+    AllowedValues:
+      - 256
+      - 512
+      - 1024
+      - 2048
+    Description: Lambda memory size (in MB)
+
+Resources:
+  LambdaStartEC2:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile:
+          !Sub
+            - |-
+              import boto3
+              ec2 = boto3.client('ec2', region_name='${HostRegion}')
+              def lambda_handler(event, context):
+                  ec2.start_instances(InstanceIds=['${InstanceId}'])
+                  print('Started instances ' + '${InstanceId}')
+            -  {HostRegion: !Ref "AWS::Region"}
+      Runtime: python3.7
+      Timeout: 5
+      MemorySize: !Ref LambdaSize
+      Handler: index.lambda_handler
+      TracingConfig:
+        Mode: Active
+      Role: !GetAtt LambdaEC2StartStopRole.Arn
+
+  LambdaStopEC2:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile:
+          !Sub
+            - |-
+              import boto3
+              ec2 = boto3.client('ec2', region_name='${HostRegion}')
+              def lambda_handler(event, context):
+                  ec2.stop_instances(InstanceIds=['${InstanceId}'])
+                  print('Stopped instances ' + '${InstanceId}')
+            -  {HostRegion: !Ref "AWS::Region"}
+      Runtime: python3.7
+      Timeout: 5
+      MemorySize: !Ref LambdaSize
+      Handler: index.lambda_handler
+      TracingConfig:
+        Mode: Active
+      Role: !GetAtt LambdaEC2StartStopRole.Arn
+
+  LambdaEC2StartStopRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - 
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+      Policies:
+        -
+          PolicyName: StartStopEC2
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - 
+                Effect: Allow
+                Action: 
+                  - "ec2:Start*"
+                  - "ec2:Stop*"
+                Resource: "*"
+
+  Iterator:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile:
+          !Sub
+            - |-
+              import boto3
+              client = boto3.client('lambda')
+              def lambda_handler(event, context):
+                  index = event['iterator']['index'] + 1
+                  response = client.invoke(
+                      FunctionName='${LambdaStopEC2}',
+                      InvocationType='Event'
+                  )
+                  return {
+                      'index': index,
+                      'continue': index < event['iterator']['count'],
+                      'count': event['iterator']['count']
+                  }
+            -  {StreamName: !Ref LambdaStopEC2}
+      Runtime: python3.7
+      Timeout: 5
+      MemorySize: !Ref LambdaSize
+      Handler: index.lambda_handler
+      TracingConfig:
+        Mode: Active
+      Role: !GetAtt IteratorExecutionRole.Arn
+
+  IteratorExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - 
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
+      Policies:
+        -
+          PolicyName: InvokeLambda
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - 
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt LambdaStopEC2.Arn
+  StateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: !Join ["", ["LambdaSubMinute", !Ref LambdaSize]]
+      DefinitionString: 
+        !Sub
+          - |-
+            {
+              "Comment": "Invoke Lambda every 10 seconds",
+              "StartAt": "ConfigureCount",
+              "States": {
+                "ConfigureCount": {
+                  "Type": "Pass",
+                  "Result": {
+                    "index": 0,
+                    "count": 6
+                  },
+                  "ResultPath": "$.iterator",
+                  "Next": "Iterator"
+                },
+                "Iterator": {
+                  "Type": "Task",
+                  "Resource": "${IteratorArn}",
+                  "ResultPath": "$.iterator",
+                  "Next": "IsCountReached"
+                },
+                "IsCountReached": {
+                  "Type": "Choice",
+                  "Choices": [
+                    {
+                      "Variable": "$.iterator.continue",
+                      "BooleanEquals": true,
+                      "Next": "Wait"
+                    }
+                  ],
+                  "Default": "Done"
+                },
+                "Wait": {
+                  "Type": "Wait",
+                  "Seconds": 10,
+                  "Next": "Iterator"
+                },
+                "Done": {
+                  "Type": "Pass",
+                  "End": true
+                }
+              }
+            }
+          -  {IteratorArn: !GetAtt Iterator.Arn}
+      RoleArn: !GetAtt StateMachineExecutionRole.Arn
+
+  StateMachineExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - 
+            Effect: Allow
+            Principal:
+              Service: !Join ["", ["states.", !Ref "AWS::Region", ".amazonaws.com"]]
+            Action: sts:AssumeRole
+      Path: /service-role/
+      Policies:
+        -
+          PolicyName: StepFunctionsInvokeLambda
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - 
+                Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt Iterator.Arn
+
+  Cron:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Executes Step Functions every minute
+      ScheduleExpression: rate(1 minute)
+      State: DISABLED
+      Targets:
+        -
+          Arn: !Ref StateMachine
+          Id: !Join ["", ["LambdaSubMinute", !Ref LambdaSize]]
+          RoleArn: !GetAtt CronExecutionRole.Arn
+
+  CronExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - 
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /service-role/
+      Policies:
+        -
+          PolicyName: CloudWatchEventsStartStepFunctions
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - 
+                Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref StateMachine
