@@ -4,7 +4,16 @@ Description: A sample template to test
 Parameters:
   InstanceId:
     Type: String
-    Default: i-<REPLACE ME>
+    Default: i-<REPLACE>
+    Description: EC2 instance ID
+  NodeName:
+    Type: String
+    Default: ValidatorNode
+    Description: Reference name
+  CertificateId: 
+    Type: String
+    Default: <REPLACE>
+    Description: IOT X.509 certificate ID
   LambdaSize:
     Type: Number
     Default: 256
@@ -16,6 +25,7 @@ Parameters:
     Description: Lambda memory size (in MB)
 
 Resources:
+
   LambdaStartEC2:
     Type: AWS::Lambda::Function
     Properties:
@@ -25,9 +35,10 @@ Resources:
             - |-
               import boto3
               ec2 = boto3.client('ec2', region_name='${HostRegion}')
+              instances = ['${InstanceId}']
               def lambda_handler(event, context):
-                  ec2.start_instances(InstanceIds=['${InstanceId}'])
-                  print('Started instances ' + '${InstanceId}')
+                  ec2.start_instances(InstanceIds=instances)
+                  print('Started instances ' + str(instances))
             -  {HostRegion: !Ref "AWS::Region"}
       Runtime: python3.7
       Timeout: 5
@@ -46,9 +57,10 @@ Resources:
             - |-
               import boto3
               ec2 = boto3.client('ec2', region_name='${HostRegion}')
+              instances = ['${InstanceId}']
               def lambda_handler(event, context):
-                  ec2.stop_instances(InstanceIds=['${InstanceId}'])
-                  print('Stopped instances ' + '${InstanceId}')
+                  ec2.stop_instances(InstanceIds=instances)
+                  print('Stopped instances ' + str(instances))
             -  {HostRegion: !Ref "AWS::Region"}
       Runtime: python3.7
       Timeout: 5
@@ -86,6 +98,27 @@ Resources:
                   - "ec2:Start*"
                   - "ec2:Stop*"
                 Resource: "*"
+  Cron24:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Executes event at 24 hours
+      ScheduleExpression: cron(0 0 * * ? *)
+      State: DISABLED
+      Targets:
+        -
+          Arn: !GetAtt LambdaStopEC2.Arn
+          Id: !Join [ "", [ !Ref NodeName,"Cron"]]
+
+  Cron12:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Executes event at 12 hours
+      ScheduleExpression: cron(0 12 * * ? *)
+      State: DISABLED
+      Targets:
+        -
+          Arn: !GetAtt LambdaStartEC2.Arn
+          Id: !Join [ "", [ !Ref NodeName,"Cron"]]
 
   Iterator:
     Type: AWS::Lambda::Function
@@ -141,6 +174,7 @@ Resources:
                 Effect: Allow
                 Action: lambda:InvokeFunction
                 Resource: !GetAtt LambdaStopEC2.Arn
+
   StateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
@@ -215,7 +249,7 @@ Resources:
                 Action: lambda:InvokeFunction
                 Resource: !GetAtt Iterator.Arn
 
-  Cron:
+  CronMinClock:
     Type: AWS::Events::Rule
     Properties:
       Description: Executes Step Functions every minute
@@ -225,9 +259,9 @@ Resources:
         -
           Arn: !Ref StateMachine
           Id: !Join ["", ["LambdaSubMinute", !Ref LambdaSize]]
-          RoleArn: !GetAtt CronExecutionRole.Arn
+          RoleArn: !GetAtt CronMinClockExecRole.Arn
 
-  CronExecutionRole:
+  CronMinClockExecRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -249,3 +283,38 @@ Resources:
                 Effect: Allow
                 Action: states:StartExecution
                 Resource: !Ref StateMachine
+
+  ValidatorNodePolicy: 
+      Type: AWS::IoT::Policy
+      Properties: 
+        PolicyName: !Join [ "", [ !Ref NodeName,"Policy"]]
+        PolicyDocument: 
+          Version: "2012-10-17"
+          Statement: 
+            - 
+              Effect: "Allow"
+              Action: "iot:*"
+              Resource: "*"
+
+  ValidatorNodePolicyPrincipalAttachment: 
+    Type: AWS::IoT::PolicyPrincipalAttachment
+    Properties: 
+      PolicyName: !Join [ "", [ !Ref NodeName,"Policy"]]
+      Principal: !Join [ "", [ "arn:aws:iot:", !Ref "AWS::Region", ":", !Ref "AWS::AccountId", ":cert/" ,!Ref CertificateId] ]
+    DependsOn:
+      - ValidatorNodePolicy
+
+  ValidatorNode:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join [ "", [ !Ref NodeName,"Thing"]]
+    DependsOn:
+      - ValidatorNodePolicy
+    
+  ValidatorNodePrincipalAttachment: 
+    Type: AWS::IoT::ThingPrincipalAttachment
+    Properties: 
+      ThingName: !Join [ "", [ !Ref NodeName,"Thing"]]
+      Principal: !Join [ "", [ "arn:aws:iot:", !Ref "AWS::Region", ":", !Ref "AWS::AccountId", ":cert/" ,!Ref CertificateId] ]
+    DependsOn:
+      - ValidatorNode
