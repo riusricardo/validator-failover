@@ -1,12 +1,10 @@
-# validator-backup
+# Validator Backup Node
 
-### Systemd monitor
-```
->>> from pystemd.systemd1 import Unit
->>> unit = Unit(b'polkadot-validator.service')
->>> unit.load()
->>> unit.Unit.ActiveState
-b'active'
->>> unit.Unit.ActiveState.decode('utf-8')
-'active'
-```
+Serverless architecture to handle validator nodes outages & service interruptions.
+
+## Basic Setup
+* Setup the cloud architecture using the [AWS CloudFormation Console](https://console.aws.amazon.com/cloudformation/) template: [Basic Validator Template](basic/BasicServerlessValidator.yml)
+* Run the Python script on your Validator node: [Basic Validator Script](basic/BasicValidatorNode.py)
+* Replace your credentials and certificates in the Python script.
+
+
