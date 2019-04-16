@@ -66,6 +66,6 @@ while True:
       myShadowUpdateCallback, 5)
 
   # Wait for this test value to be added.
-  time.sleep(1)
+  time.sleep(10)
 
 

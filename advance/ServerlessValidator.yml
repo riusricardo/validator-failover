@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: A sample template to test
+Description: Serverless architecture to handle validator nodes outages & service interruptions.
 
 Parameters:
   InstanceId:
@@ -102,27 +102,62 @@ Resources:
                   - "ec2:Start*"
                   - "ec2:Stop*"
                 Resource: "*"
-  Cron24:
-    Type: AWS::Events::Rule
-    Properties:
-      Description: Executes event at 24 hours
-      ScheduleExpression: cron(0 0 * * ? *)
-      State: DISABLED
-      Targets:
-        -
-          Arn: !GetAtt LambdaStopEC2.Arn
-          Id: !Join [ "", [ !Ref NodeName,"Cron"]]
 
-  Cron12:
+  Cron24Start:
     Type: AWS::Events::Rule
     Properties:
-      Description: Executes event at 12 hours
-      ScheduleExpression: cron(0 12 * * ? *)
-      State: DISABLED
+      Description: Executes event at 00:00 hours
+      ScheduleExpression: cron(0 0 * * ? *)
+      State: ENABLED
       Targets:
         -
           Arn: !GetAtt LambdaStartEC2.Arn
-          Id: !Join [ "", [ !Ref NodeName,"Cron"]]
+          Id: !Join [ "", [ !Ref NodeName,"Cron24Start"]]
+    DependsOn:
+      - LambdaStartEC2
+      - LambdaStopEC2
+      
+  Cron24Stop:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Stops event at 00:30 hours
+      ScheduleExpression: cron(30 0 * * ? *)
+      State: ENABLED
+      Targets:
+        -
+          Arn: !GetAtt LambdaStopEC2.Arn
+          Id: !Join [ "", [ !Ref NodeName,"Cron24Stop"]]
+    DependsOn:
+      - LambdaStartEC2
+      - LambdaStopEC2
+
+  Cron12Start:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Executes event at 12:00 hours
+      ScheduleExpression: cron(0 12 * * ? *)
+      State: ENABLED
+      Targets:
+        -
+          Arn: !GetAtt LambdaStartEC2.Arn
+          Id: !Join [ "", [ !Ref NodeName,"Cron12Start"]]
+    DependsOn:
+      - LambdaStartEC2
+      - LambdaStopEC2
+
+  Cron12Stop:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Stops event at 12:30 hours
+      ScheduleExpression: cron(30 12 * * ? *)
+      State: ENABLED
+      Targets:
+        -
+          Arn: !GetAtt LambdaStopEC2.Arn
+          Id: !Join [ "", [ !Ref NodeName,"Cron12Stop"]]
+    DependsOn:
+      - LambdaStartEC2
+      - LambdaStopEC2
 
   Iterator:
     Type: AWS::Lambda::Function
@@ -323,21 +358,45 @@ Resources:
     DependsOn:
       - ValidatorNode
 
-  ValidatorNodeIOTTopicRule: 
+  ValidatorNodeStartTopicRule: 
     Type: AWS::IoT::TopicRule
     Properties: 
-      RuleName: !Join [ "", [ !Ref NodeName,"TopicRule"]]
-      TopicRulePayload: 
+      RuleName: !Join [ "", [ !Ref NodeName,"StartTopicRule"]]
+      TopicRulePayload:
+        Description: 'Get Validator status'
+        AwsIotSqlVersion: '2016-03-23' 
         RuleDisabled: false
-        Sql: 
-            "SELECT *, topic(3) as thing FROM '$aws/things/+/shadow/update/accepted' WHERE state.reported.status = 'inactive'"
-        Actions: 
+        Sql: !Sub 'SELECT *, topic(3) as thing FROM "$aws/things/${NodeName}Thing/shadow/update/accepted" WHERE state.reported.status = "inactive"'
+        Actions:
           - Lambda:
               FunctionArn: !GetAtt LambdaStartEC2.Arn
           - Sns:
               MessageFormat: JSON
               RoleArn: !GetAtt ValidatorNodeIOTExecRole.Arn
               TargetArn: !Ref ValidatorNodeSNSTopic
+    DependsOn:
+      - LambdaStartEC2
+      - LambdaStopEC2
+
+  ValidatorNodeStopTopicRule: 
+    Type: AWS::IoT::TopicRule
+    Properties: 
+      RuleName: !Join [ "", [ !Ref NodeName,"StopTopicRule"]]
+      TopicRulePayload:
+        Description: 'Get Validator status'
+        AwsIotSqlVersion: '2016-03-23' 
+        RuleDisabled: false
+        Sql: !Sub 'SELECT *, topic(3) as thing FROM "$aws/things/${NodeName}Thing/shadow/update/accepted" WHERE state.reported.status = "active"'
+        Actions:
+          - Lambda:
+              FunctionArn: !GetAtt LambdaStopEC2.Arn
+          - Sns:
+              MessageFormat: JSON
+              RoleArn: !GetAtt ValidatorNodeIOTExecRole.Arn
+              TargetArn: !Ref ValidatorNodeSNSTopic
+    DependsOn:
+      - LambdaStartEC2
+      - LambdaStopEC2
 
   ValidatorNodeIOTExecRole:
     Type: AWS::IAM::Role
@@ -381,4 +440,3 @@ Resources:
 
 
 
-  

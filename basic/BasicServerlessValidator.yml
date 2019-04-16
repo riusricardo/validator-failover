@@ -1,0 +1,219 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Basic serverless architecture to handle validator nodes outages & service interruptions.
+
+Parameters:
+  InstanceId:
+    Type: String
+    Default: i-<REPLACE>
+    Description: Validator instance ID (EC2)
+  NodeName:
+    Type: String
+    Default: ValidatorNode
+    Description: Validator reference name
+  CertificateId: 
+    Type: String
+    Default: <REPLACE>
+    Description: Validator X.509 certificate ID (IOT)
+  Email: 
+    Type: String
+    Default: <REPLACE>
+    Description: Receive email alerts
+  LambdaSize:
+    Type: Number
+    Default: 256
+    AllowedValues:
+      - 256
+      - 512
+      - 1024
+      - 2048
+    Description: Lambda memory size [MB]
+
+Resources:
+
+  LambdaStartEC2:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile:
+          !Sub
+            - |-
+              import boto3
+              ec2 = boto3.client('ec2', region_name='${HostRegion}')
+              instances = ['${InstanceId}']
+              def lambda_handler(event, context):
+                  ec2.start_instances(InstanceIds=instances)
+                  print('Started instances ' + str(instances))
+            -  {HostRegion: !Ref "AWS::Region"}
+      Runtime: python3.7
+      Timeout: 5
+      MemorySize: !Ref LambdaSize
+      Handler: index.lambda_handler
+      TracingConfig:
+        Mode: Active
+      Role: !GetAtt LambdaEC2StartStopRole.Arn
+
+  LambdaStopEC2:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile:
+          !Sub
+            - |-
+              import boto3
+              ec2 = boto3.client('ec2', region_name='${HostRegion}')
+              instances = ['${InstanceId}']
+              def lambda_handler(event, context):
+                  ec2.stop_instances(InstanceIds=instances)
+                  print('Stopped instances ' + str(instances))
+            -  {HostRegion: !Ref "AWS::Region"}
+      Runtime: python3.7
+      Timeout: 5
+      MemorySize: !Ref LambdaSize
+      Handler: index.lambda_handler
+      TracingConfig:
+        Mode: Active
+      Role: !GetAtt LambdaEC2StartStopRole.Arn
+
+  LambdaEC2StartStopRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - 
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/AWSXrayWriteOnlyAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+      Policies:
+        -
+          PolicyName: StartStopEC2
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - 
+                Effect: Allow
+                Action: 
+                  - "ec2:Start*"
+                  - "ec2:Stop*"
+                Resource: "*"
+
+  ValidatorNodePolicy: 
+      Type: AWS::IoT::Policy
+      Properties: 
+        PolicyName: !Join [ "", [ !Ref NodeName,"Policy"]]
+        PolicyDocument: 
+          Version: "2012-10-17"
+          Statement: 
+            - 
+              Effect: "Allow"
+              Action: "iot:*"
+              Resource: "*"
+
+  ValidatorNodePolicyPrincipalAttachment: 
+    Type: AWS::IoT::PolicyPrincipalAttachment
+    Properties: 
+      PolicyName: !Join [ "", [ !Ref NodeName,"Policy"]]
+      Principal: !Join [ "", [ "arn:aws:iot:", !Ref "AWS::Region", ":", !Ref "AWS::AccountId", ":cert/" ,!Ref CertificateId] ]
+    DependsOn:
+      - ValidatorNodePolicy
+
+  ValidatorNode:
+    Type: AWS::IoT::Thing
+    Properties:
+      ThingName: !Join [ "", [ !Ref NodeName,"Thing"]]
+    DependsOn:
+      - ValidatorNodePolicy
+    
+  ValidatorNodePrincipalAttachment: 
+    Type: AWS::IoT::ThingPrincipalAttachment
+    Properties: 
+      ThingName: !Join [ "", [ !Ref NodeName,"Thing"]]
+      Principal: !Join [ "", [ "arn:aws:iot:", !Ref "AWS::Region", ":", !Ref "AWS::AccountId", ":cert/" ,!Ref CertificateId] ]
+    DependsOn:
+      - ValidatorNode
+
+  ValidatorNodeStartTopicRule: 
+    Type: AWS::IoT::TopicRule
+    Properties: 
+      RuleName: !Join [ "", [ !Ref NodeName,"StartTopicRule"]]
+      TopicRulePayload:
+        Description: 'Get Validator status'
+        AwsIotSqlVersion: '2016-03-23' 
+        RuleDisabled: false
+        Sql: !Sub 'SELECT *, topic(3) as thing FROM "$aws/things/${NodeName}Thing/shadow/update/accepted" WHERE state.reported.status = "inactive"'
+        Actions:
+          - Lambda:
+              FunctionArn: !GetAtt LambdaStartEC2.Arn
+          - Sns:
+              MessageFormat: JSON
+              RoleArn: !GetAtt ValidatorNodeIOTExecRole.Arn
+              TargetArn: !Ref ValidatorNodeSNSTopic
+    DependsOn:
+      - LambdaStartEC2
+      - LambdaStopEC2
+
+  ValidatorNodeStopTopicRule: 
+    Type: AWS::IoT::TopicRule
+    Properties: 
+      RuleName: !Join [ "", [ !Ref NodeName,"StopTopicRule"]]
+      TopicRulePayload:
+        Description: 'Get Validator status'
+        AwsIotSqlVersion: '2016-03-23' 
+        RuleDisabled: false
+        Sql: !Sub 'SELECT *, topic(3) as thing FROM "$aws/things/${NodeName}Thing/shadow/update/accepted" WHERE state.reported.status = "active"'
+        Actions:
+          - Lambda:
+              FunctionArn: !GetAtt LambdaStopEC2.Arn
+          - Sns:
+              MessageFormat: JSON
+              RoleArn: !GetAtt ValidatorNodeIOTExecRole.Arn
+              TargetArn: !Ref ValidatorNodeSNSTopic
+    DependsOn:
+      - LambdaStartEC2
+      - LambdaStopEC2
+
+  ValidatorNodeIOTExecRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - 
+            Effect: Allow
+            Principal:
+              Service: !Join ["", ["states.", !Ref "AWS::Region", ".amazonaws.com"]]
+            Action: sts:AssumeRole
+      Path: /service-role/
+      Policies:
+        -
+          PolicyName: !Join [ "", [ !Ref NodeName,"snsPublish"]]
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement: 
+              - 
+                Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref ValidatorNodeSNSTopic
+
+  ValidatorNodeSNSTopic:
+    Type: AWS::SNS::Topic
+
+  ValidatorEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      Endpoint: !Ref Email
+      TopicArn: !Ref ValidatorNodeSNSTopic
+
+  LambdaStartSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: lambda
+      Endpoint: !GetAtt LambdaStartEC2.Arn
+      TopicArn: !Ref ValidatorNodeSNSTopic
