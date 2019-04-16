@@ -146,7 +146,7 @@ Resources:
         Description: 'Get Validator status'
         AwsIotSqlVersion: '2016-03-23' 
         RuleDisabled: false
-        Sql: !Sub 'SELECT *, topic(3) as thing FROM "$aws/things/${NodeName}Thing/shadow/update/accepted" WHERE state.reported.status = "inactive"'
+        Sql: !Sub 'SELECT *, topic(3) as thing FROM "$aws/things/${NodeName}Thing/shadow/update/accepted" WHERE state.reported.status = "inactive" OR state.reported.status = "failed"'
         Actions:
           - Lambda:
               FunctionArn: !GetAtt LambdaStartEC2.Arn
@@ -178,6 +178,26 @@ Resources:
       - LambdaStartEC2
       - LambdaStopEC2
 
+  ValidatorNodeDisconnectedTopicRule: 
+    Type: AWS::IoT::TopicRule
+    Properties: 
+      RuleName: !Join [ "", [ !Ref NodeName,"DisconnectedTopicRule"]]
+      TopicRulePayload:
+        Description: 'Get Validator connection status'
+        AwsIotSqlVersion: '2016-03-23' 
+        RuleDisabled: false
+        Sql: !Sub 'SELECT * FROM "$aws/events/presence/disconnected/${NodeName}Thing"'
+        Actions:
+          - Lambda:
+              FunctionArn: !GetAtt LambdaStartEC2.Arn
+          - Sns:
+              MessageFormat: JSON
+              RoleArn: !GetAtt ValidatorNodeIOTExecRole.Arn
+              TargetArn: !Ref ValidatorNodeSNSTopic
+    DependsOn:
+      - LambdaStartEC2
+      - LambdaStopEC2
+
   ValidatorNodeIOTExecRole:
     Type: AWS::IAM::Role
     Properties:
@@ -187,7 +207,7 @@ Resources:
           - 
             Effect: Allow
             Principal:
-              Service: !Join ["", ["states.", !Ref "AWS::Region", ".amazonaws.com"]]
+              Service: events.amazonaws.com
             Action: sts:AssumeRole
       Path: /service-role/
       Policies:
@@ -198,7 +218,9 @@ Resources:
             Statement: 
               - 
                 Effect: Allow
-                Action: sns:Publish
+                Principal:
+                  Service: events.amazonaws.com
+                Action: 'sns:Publish'
                 Resource: !Ref ValidatorNodeSNSTopic
 
   ValidatorNodeSNSTopic:
