@@ -1,38 +1,33 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+##################################################
+## A serverless failover solution for Web3 validator nodes
+##################################################
+## Author: Ricardo Rius
+## Copyright: Copyright 2019, Ricardo Rius
+## License: Apache-2.0
+## Version: 0.1.3
+##################################################
+
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTShadowClient
 from pystemd.systemd1 import Unit
-from PyInquirer import prompt
-import time, sys
+import time
 
 def getConfigParameters():
-  questions = [
-      {
-          'type': 'input',
-          'name': 'host_name',
-          'message': 'The unique HOSTNAME that AWS IoT; generated for this device: ',
-      },
-      {
-          'type': 'input',
-          'name': 'root_ca',
-          'message': 'Path to the correct ROOT CA file for AWS IoT:',
-      },
-      {
-          'type': 'input',
-          'name': 'private_key',
-          'message': 'Path to your PRIVATE KEY file:',
-      },
-      {
-          'type': 'input',
-          'name': 'cert_file',
-          'message': 'Path to your CERTIFICATE FILE:',
-      },
-      {
-          'type': 'input',
-          'name': 'name',
-          'message': 'The name of the AWS IOT Thing:',
-          'default': 'ValidatorNode',
-      },
-  ]
-  return prompt(questions)
+  parameters = {
+      #The unique HOSTNAME that AWS IoT; generated for this device.
+      'host_name': "yourhostname-ats.iot.us-east-1.amazonaws.com",
+      #Path to the AWS ROOT CA file.
+      'root_ca': "AmazonRootCA1.pem",
+      #Path to your PRIVATE KEY file.
+      'private_key':"yourkeyid-private.pem.key",
+      #Path to your CERTIFICATE file.
+      'cert_file':"yourkeyid-certificate.pem.crt",
+      #The name of the AWS IOT Thing.
+      'name': "ValidatorNode"
+    }
+  return parameters
 
 def setClient(answers):
   try:
@@ -53,7 +48,7 @@ def setClient(answers):
 
 def myShadowUpdateCallback(payload, responseStatus, token):
   print()
-  print('UPDATE: $aws/things/' + 'myThing' +'/shadow/update/#')
+  print('UPDATE: $aws/things/' + 'ValidatorNode' +'/shadow/update/#')
   print("payload = " + payload)
   print("responseStatus = " + responseStatus)
   print("token = " + token)
