@@ -1,71 +1,110 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+##################################################
+## A serverless failover solution for Web3 validator nodes
+##################################################
+## Author: Ricardo Rius
+## Copyright: Copyright 2019, Ricardo Rius
+## License: Apache-2.0
+## Version: 0.1.3
+##################################################
 
 from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTShadowClient
 from pystemd.systemd1 import Unit
-import time
+from PyInquirer import prompt
+import time, sys
 
-# A random programmatic shadow client ID.
-SHADOW_CLIENT = "ShadowNodeClient"
+def getConfigParameters():
+  questions = [
+      {
+          'type': 'input',
+          'name': 'host_name',
+          'message': 'The unique HOSTNAME that AWS IoT; generated for this device: ',
+      },
+      {
+          'type': 'input',
+          'name': 'root_ca',
+          'message': 'Path to the correct ROOT CA file for AWS IoT:',
+      },
+      {
+          'type': 'input',
+          'name': 'private_key',
+          'message': 'Path to your PRIVATE KEY file:',
+      },
+      {
+          'type': 'input',
+          'name': 'cert_file',
+          'message': 'Path to your CERTIFICATE FILE:',
+      },
+      {
+          'type': 'input',
+          'name': 'name',
+          'message': 'The name of the AWS IOT Thing:',
+          'default': 'ValidatorNode',
+      },
+  ]
+  return prompt(questions)
 
-# The unique hostname that &IoT; generated for 
-# this device.
-HOST_NAME = "yourhostname-ats.iot.us-east-1.amazonaws.com"
+def setClient(answers):
+  try:
+    shadowClient = AWSIoTMQTTShadowClient(answers['name']+"Thing")
+    shadowClient.configureCredentials(answers['root_ca'], answers['private_key'], answers['cert_file'])
+  except FileNotFoundError as fnf_error:
+    print('File not found.',fnf_error)
+  else: 
+    try:
+      shadowClient.configureEndpoint(answers['host_name'], 8883)
+      shadowClient.configureConnectDisconnectTimeout(10)
+      shadowClient.configureMQTTOperationTimeout(5)
+      shadowClient.connect()
+      # Create a programmatic representation of the shadow.
+      return shadowClient.createShadowHandlerWithName(answers['name']+"Thing", True)
+    except AssertionError as error:
+      print(error)
 
-# The relative path to the correct root CA file for &IoT;, 
-# which you have already saved onto this device.
-ROOT_CA = "AmazonRootCA1.pem"
-
-# The relative path to your private key file that 
-# &IoT; generated for this device, which you 
-# have already saved onto this device.
-PRIVATE_KEY = "yourkeyid-private.pem.key"
-
-# The relative path to your certificate file that 
-# &IoT; generated for this device, which you 
-# have already saved onto this device.
-CERT_FILE = "yourkeyid-certificate.pem.crt.txt"
-
-# A programmatic shadow handler name prefix.
-SHADOW_HANDLER = "ValidatorNode"
-
-unit = Unit(b'polkadot-validator.service')
-# Automatically called whenever the shadow is updated.
 def myShadowUpdateCallback(payload, responseStatus, token):
   print()
-  print('UPDATE: $aws/things/' + SHADOW_HANDLER + 
-    '/shadow/update/#')
+  print('UPDATE: $aws/things/' + 'myThing' +'/shadow/update/#')
   print("payload = " + payload)
   print("responseStatus = " + responseStatus)
   print("token = " + token)
 
-# Create, configure, and connect a shadow client.
-myShadowClient = AWSIoTMQTTShadowClient(SHADOW_CLIENT)
-myShadowClient.configureEndpoint(HOST_NAME, 8883)
-myShadowClient.configureCredentials(ROOT_CA, PRIVATE_KEY,
-  CERT_FILE)
-myShadowClient.configureConnectDisconnectTimeout(10)
-myShadowClient.configureMQTTOperationTimeout(5)
-myShadowClient.connect()
 
-# Create a programmatic representation of the shadow.
-myDeviceShadow = myShadowClient.createShadowHandlerWithName(
-  SHADOW_HANDLER, True)
+def main():
 
-# Initialize
-unit.load()
-status = 'active'
+  # Initialize, 3 attempts
+  for i in range(3):
+    try:
+      answers = getConfigParameters()
+      deviceShadow = setClient(answers)
+    except OSError as os_error:
+      print(os_error)
+    else:
+      break
+    
+  unit = Unit(b'polkadot-validator.service')
+  unit.load()
+  status = 'unknown'
 
-# To stop running this script, press Ctrl+C.
-while True:
-  
-  prev_status = status
-  status = unit.Unit.ActiveState.decode('utf-8')
-  
-  if prev_status != status:
-      msg = '{"state":{"reported":{"status":"%(data)s"}}}' % { 'data' : status}
-  else:
-      msg = '{"state":{"desired":{"status":"%(data)s"}}}' % { 'data' : prev_status}
+  # To stop running this script, press Ctrl+C.
+  while True:
+    prev_status = status
+    status = unit.Unit.ActiveState.decode('utf-8')
+    
+    try:
+      if prev_status != status:
+        msg = '{"state":{"reported":{"status":"%(data)s"}}}' % { 'data' : status}
+        deviceShadow.shadowUpdate(msg, myShadowUpdateCallback, 5)
+      else:
+        msg = '{"state":{"desired":{"status":"%(data)s"}}}' % { 'data' : prev_status}
+        # Uncomment next line if you want to send AWS IOT desired status to enable deltas.
+        #deviceShadow.shadowUpdate(msg, myShadowUpdateCallback, 5) 
+    except:
+      break
 
-  myDeviceShadow.shadowUpdate(msg, myShadowUpdateCallback, 5)
-  
-  # Wait for this test value to be added.
-  time.sleep(2)
+    # Polling wait time [sec]
+    time.sleep(.5)
+
+if __name__ == '__main__':
+  main()

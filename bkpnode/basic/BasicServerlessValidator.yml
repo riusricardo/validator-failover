@@ -1,3 +1,11 @@
+##################################################
+## A serverless failover solution for Web3 validator nodes
+##################################################
+## Author: Ricardo Rius
+## Copyright: Copyright 2019, Ricardo Rius
+## License: Apache-2.0
+## Version: 0.1.3
+##################################################
 AWSTemplateFormatVersion: "2010-09-09"
 Description: Basic serverless architecture to handle validator nodes outages & service interruptions.
 
@@ -218,8 +226,6 @@ Resources:
             Statement: 
               - 
                 Effect: Allow
-                Principal:
-                  Service: events.amazonaws.com
                 Action: 'sns:Publish'
                 Resource: !Ref ValidatorNodeSNSTopic
 
