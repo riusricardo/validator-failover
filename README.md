@@ -2,7 +2,7 @@
 
 Serverless architecture to handle validator nodes outages & service interruptions.
 
-HackerNoon: [A Serverless Failover Solution for Web 3.0 Validator Nodes](https://hackernoon.com/a-serverless-failover-solution-for-web-3-0-validator-nodes-e26b9d24c71d)
+HackerNoon: [A Serverless Failover Solution for Web 3.0 Validator Nodes](https://medium.com/hackernoon/a-serverless-failover-solution-for-web-3-0-validator-nodes-e26b9d24c71d)
 
 ## Basic Setup ![](https://img.shields.io/badge/Status-ACTIVE-green.svg)
 * Setup the cloud architecture using the [AWS CloudFormation Console](https://console.aws.amazon.com/cloudformation/) template: [Basic Validator Template](bkpnode/basic/BasicServerlessValidator.yml)
